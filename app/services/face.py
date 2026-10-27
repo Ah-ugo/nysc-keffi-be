@@ -51,7 +51,9 @@ class OpenCVSFaceProvider:
         if not detector.is_file() or not recognizer.is_file():
             self.unavailable_reason = "Face recognition files are not installed on the server. Contact the system administrator."
             return
-        self.detector = cv2.FaceDetectorYN.create(str(detector), "", (320, 320), 0.9, 0.3, 5000)
+        # 0.9 is too strict for some Android front-camera frames. Similarity
+        # matching still decides identity; this threshold only finds the face.
+        self.detector = cv2.FaceDetectorYN.create(str(detector), "", (320, 320), 0.65, 0.3, 5000)
         self.recognizer = cv2.FaceRecognizerSF.create(str(recognizer), "")
         cv2.setNumThreads(1)
         self.available = True
@@ -65,13 +67,33 @@ class OpenCVSFaceProvider:
             return None, None, "The photo could not be read"
         h, w = image.shape[:2]
         self.detector.setInputSize((w, h))
+        self.detector.setScoreThreshold(0.65)
         _, faces = self.detector.detect(image)
         if faces is None or len(faces) == 0:
-            return image, None, "No face was found. Retake the photo facing the camera."
+            # Backlit and low-contrast Android camera frames can hide facial
+            # detail. Retry on an equalized luminance channel before failing.
+            ycrcb = self.cv2.cvtColor(image, self.cv2.COLOR_BGR2YCrCb)
+            ycrcb[:, :, 0] = self.cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(ycrcb[:, :, 0])
+            enhanced = self.cv2.cvtColor(ycrcb, self.cv2.COLOR_YCrCb2BGR)
+            self.detector.setScoreThreshold(0.55)
+            _, faces = self.detector.detect(enhanced)
+        if (faces is None or len(faces) == 0) and min(w, h) < 720:
+            # A few mobile browsers provide a smaller camera stream than the
+            # requested ideal size. Upscale only for detection; landmarks are
+            # mapped back to the original photo for alignment.
+            scale = 1.5
+            enlarged = self.cv2.resize(image, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC)
+            self.detector.setInputSize((enlarged.shape[1], enlarged.shape[0]))
+            _, faces = self.detector.detect(enlarged)
+            if faces is not None:
+                faces = faces.copy()
+                faces[:, :14] /= scale
+        if faces is None or len(faces) == 0:
+            return image, None, "No face was found. Move closer, face the camera, and keep your face well lit and fully in frame."
         if len(faces) != 1:
             return image, None, "More than one face was found. Retake the photo alone."
         face = faces[0]
-        if float(face[-1]) < 0.90 or min(float(face[2]), float(face[3])) < 80:
+        if float(face[-1]) < 0.55 or min(float(face[2]), float(face[3])) < 60:
             return image, None, "Move closer and make sure your face is clear and well lit."
         return image, face, "ok"
 
