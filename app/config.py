@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     mongo_db: str = "nysc_keffi"
     jwt_secret: str = "dev-only-change-me"
     jwt_minutes: int = 480
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "*"
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
