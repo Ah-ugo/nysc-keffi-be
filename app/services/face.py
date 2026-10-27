@@ -88,10 +88,14 @@ class OpenCVSFaceProvider:
             return None, why
         scores = []
         for ref in refs:
-            feature, reason = self._feature(ref)
-            if feature is None:
-                return None, f"An enrolment photo could not be checked: {reason}"
-            scores.append(float(self.recognizer.match(feature, query, self.cv2.FaceRecognizerSF_FR_COSINE)))
+            try:
+                feature, _ = self._feature(ref)
+                if feature is not None:
+                    scores.append(float(self.recognizer.match(feature, query, self.cv2.FaceRecognizerSF_FR_COSINE)))
+            except Exception:
+                # A profile reference may be outside the detector's pose range.
+                # Use any valid enrollment reference; if none work, review manually.
+                continue
         if not scores:
             return None, "No enrolment photos are available"
         return max(scores), "compared"
@@ -188,9 +192,18 @@ class RekognitionProvider:
             ok, why = await asyncio.to_thread(self._detect, live)
             if not ok:
                 return FaceOutcome(self.name, None, False, None, why)
-            scores = [await asyncio.to_thread(self._compare, ref, live) for ref in refs]
         except Exception as e:
             return FaceOutcome(self.name, None, True, None, f"Provider error: {type(e).__name__}", configured=False)
+        scores = []
+        for ref in refs:
+            try:
+                scores.append(await asyncio.to_thread(self._compare, ref, live))
+            except Exception:
+                # A turned profile can be rejected by the provider; a valid
+                # front reference is still sufficient for an automatic match.
+                continue
+        if not scores:
+            return FaceOutcome(self.name, None, True, None, "No enrollment photo could be matched", configured=False)
         return FaceOutcome(self.name, max(scores) if scores else None, True, None, "Face comparison completed")
 
 

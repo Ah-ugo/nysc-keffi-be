@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api", tags=["members"])
 MAX_IMG = 6 * 1024 * 1024
 
 
-async def _read_image(f: UploadFile, label: str) -> bytes:
+async def _read_image(f: UploadFile, label: str, require_face: bool = True) -> bytes:
     data = await f.read()
     if len(data) > MAX_IMG:
         raise HTTPException(413, f"{label} photo is too large (max 6MB)")
@@ -29,9 +29,13 @@ async def _read_image(f: UploadFile, label: str) -> bytes:
     ok, why = image_quality(data)
     if not ok:
         raise HTTPException(422, f"{label} photo rejected: {why}")
-    ok, why = await get_provider().check_quality(data)
-    if not ok:
-        raise HTTPException(422, f"{label} photo rejected: {why}")
+    # The front image is the primary face reference and must pass detection.
+    # Profile views can be missed by frontal-face detectors, so keep their
+    # image-quality checks but don't require the same frontal detection.
+    if require_face:
+        ok, why = await get_provider().check_quality(data)
+        if not ok:
+            raise HTTPException(422, f"{label} photo rejected: {why}")
     return data
 
 
@@ -55,7 +59,7 @@ async def register(
     if await db.members.find_one({"callup": cu}, {"_id": 1}):
         await notify(DIRECTOR, stream["_id"], "Registration exception", "A duplicate call-up registration was attempted.", "registration_exception")
         raise HTTPException(409, "This call-up number is already registered. See the registration desk if this is an error.")
-    f, s = await _read_image(front, "Front"), await _read_image(side, "Side-profile")
+    f, s = await _read_image(front, "Front"), await _read_image(side, "Side-profile", require_face=False)
     if not storage.configured():
         raise HTTPException(503, "Image storage is not configured")
     folder = f"nysc/{stream['label'].replace(' ', '_')}/{cu.replace('/', '_')}"
